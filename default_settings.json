@@ -26,6 +26,7 @@
     "bg_reinit_threshold": 1,
     "bg_reinit_throttle": 5,
     "min_contour_area": 1,
-    "max_contour_area_fraction": 0.05
+    "max_contour_area_fraction": 0.05,
+    "max_point_age": 100
   }
 }

@@ -228,3 +228,54 @@ class TestFrameHandlerContourSelection(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStalePoints(unittest.TestCase):
+    # a well that has been quiet for a long time no longer tells us where its fly is
+    def setUp(self):
+        self.grid = make_grid()
+        self.handler = MagicMock()
+        self.frame_handler = FrameHandler(
+            self.grid, AppSettings(keep_defaults=True), self.handler
+        )
+        self.frame = np.zeros((411, 640, 3), dtype=np.uint8)
+        item = self.grid.rows[3].items[5]
+        (start_point, end_point) = item.bounds
+        self.left = (start_point[0] + 8, (start_point[1] + end_point[1]) / 2)
+        self.right = (end_point[0] - 8, (start_point[1] + end_point[1]) / 2)
+
+    def blob_at(self, point, size=8):
+        return square_contour(point[0], point[1], size)
+
+    # set explicitly rather than read off the handler, so these tests still express
+    # a behaviour rather than an attribute lookup
+    max_age = 5
+
+    def seed_then_reappear(self, gap):
+        self.frame_handler.max_point_age = self.max_age
+        detector = self.frame_handler.motion_detector
+        detector.detect = MagicMock(return_value=[self.blob_at(self.left)])
+        self.frame_handler.handle(self.frame, 1)
+        detector.detect = MagicMock(return_value=[self.blob_at(self.right)])
+        self.frame_handler.handle(self.frame, 1 + gap)
+        return self.handler.handle.call_args_list
+
+    def test_measures_movement_across_a_short_gap(self):
+        calls = self.seed_then_reappear(self.max_age)
+
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(calls[0][0][0].distance, 0)
+
+    def test_ignores_a_position_that_has_gone_stale(self):
+        calls = self.seed_then_reappear(self.max_age + 1)
+
+        self.assertEqual(len(calls), 0)
+
+    def test_the_stale_position_is_replaced_not_dropped(self):
+        # the well still gets tracked, it just doesn't get credited for the jump
+        self.seed_then_reappear(self.max_age + 1)
+        item = self.grid.rows[3].items[5]
+
+        self.assertIn(item.coords, self.frame_handler.points)
+        stored = self.frame_handler.points[item.coords]
+        self.assertAlmostEqual(stored.center[0], self.right[0], delta=1)

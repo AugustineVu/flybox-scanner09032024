@@ -17,6 +17,7 @@ class FrameHandler(MotionEvent):
         self.grid = grid
         self.motion_detector = MotionDetector(settings)
         self.handler = handler
+        self.max_point_age = settings.get("motion.max_point_age")
 
         # the point carried over from the previous frame, per well
         self.points: Dict[tuple, MotionPoint] = {}
@@ -26,6 +27,13 @@ class FrameHandler(MotionEvent):
 
     def find_item(self, center):
         return self.grid.find_item(center)
+
+    def is_comparable(self, last_point, point):
+        # the subtractor only reports movement, so a well with no contours usually
+        # means its fly is sitting still and the stored position still holds. after a
+        # long enough silence though we're only guessing: pairing a minutes old
+        # position against a fresh blob measures a journey we never actually saw
+        return (point.frame_count - last_point.frame_count) <= self.max_point_age
 
     def handle_contour(self, contour, frame_count: int):
         # note that this does not emit anything: it only picks the contour that
@@ -55,7 +63,7 @@ class FrameHandler(MotionEvent):
         # now that the frame is resolved, measure against the previous frame's point
         for coords, point in self.frame_points.items():
             last_point = self.points.get(coords)
-            if last_point is not None:
+            if last_point is not None and self.is_comparable(last_point, point):
                 event = MotionEvent(
                     point=point,
                     last_point=last_point,
