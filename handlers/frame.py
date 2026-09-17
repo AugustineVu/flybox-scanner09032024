@@ -1,11 +1,10 @@
 from typing import Dict
 
-import cv2
-
 from custom_types.grid import Grid
 from custom_types.motion import MotionEvent, MotionEventHandler, MotionPoint
 from detection.motion import MotionDetector
 from utils.app_settings import AppSettings
+from utils.geometry import get_contour_center
 
 # this class handles motion detected in frames and emits motion events
 # at the moment, this class only handles a single motion event per grid item per frame,
@@ -22,15 +21,14 @@ class FrameHandler(MotionEvent):
         self.points: Dict[tuple, MotionPoint] = {}
         self.average = 0
 
-    def find_item(self, contour):
-        bounds = cv2.boundingRect(contour)
-        row = self.grid.find_row(bounds)
+    def find_item(self, center):
+        row = self.grid.find_row(center)
         if row is None:
             return
-        return row.find_item(bounds)
+        return row.find_item(center)
 
     def handle_contour(self, contour, frame, raw_frame, frame_count: int):
-        item = self.find_item(contour)
+        item = self.find_item(get_contour_center(contour))
         if item is None:
             return
 

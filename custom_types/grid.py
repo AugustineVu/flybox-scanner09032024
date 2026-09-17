@@ -1,21 +1,22 @@
 from typing import List, Tuple
 
-from custom_types.contour import ContourBounds
-from custom_types.geometry import Rectangle
+from custom_types.geometry import Point, Rectangle
 
 
 class GridComponent:
-    def contains(self, contour_bounds: ContourBounds):
+    # this takes the fly's center rather than its bounding box. a fly resting against a
+    # well wall has a bounding box that spills into the gap between wells, which used to
+    # match nothing at all. the center is also what distances are measured from,
+    # so assignment and measurement now agree on where the fly is
+    def contains(self, point: Point):
         try:
             (start_point, end_point) = self.bounds
         except AttributeError:
             raise Exception(f"GridComponent {self} does not have bounds")
-        (x, y, w, h) = contour_bounds
+        (x, y) = point
         return (
             start_point[0] <= x <= end_point[0]
             and start_point[1] <= y <= end_point[1]
-            and x + w <= start_point[0] + end_point[0]
-            and y + h <= start_point[1] + end_point[1]
         )
 
 
@@ -52,9 +53,9 @@ class Row(GridComponent):
                 end_point = (end_point[0], y)
         return (start_point, end_point)
 
-    def find_item(self, bounds: ContourBounds):
+    def find_item(self, point: Point):
         for item in self.items:
-            if item.contains(bounds):
+            if item.contains(point):
                 return item
         return None
 
@@ -82,9 +83,9 @@ class Grid(GridComponent):
                 end_point = (end_point[0], y)
         return (start_point, end_point)
 
-    def find_row(self, contour_bounds: ContourBounds):
+    def find_row(self, point: Point):
         for row in self.rows:
-            if row.contains(contour_bounds):
+            if row.contains(point):
                 return row
         return None
 
