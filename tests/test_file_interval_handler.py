@@ -13,9 +13,27 @@ class TestFileInterval(unittest.TestCase):
     mock_grid_y = 3
     interval = 10
 
-    def make_mock_grid(self):
+    def make_mock_grid(self, sizes=None):
         mock_grid = MagicMock()
         mock_grid.rows = []
+        if sizes is not None:
+            for i, size in enumerate(sizes):
+                mock_row = MagicMock()
+                mock_row.items = []
+                for j in range(size):
+                    mock_item = MagicMock()
+                    mock_item.coords = (i, j)
+                    mock_row.items.append(mock_item)
+                mock_grid.rows.append(mock_row)
+            mock_grid.is_rectangular = len({*sizes}) == 1
+            mock_grid.dimensions = (len(sizes), sizes[0])
+            mock_grid.matches_dimensions = (
+                lambda rows, columns: mock_grid.is_rectangular
+                and mock_grid.dimensions == (rows, columns)
+            )
+            return mock_grid
+        mock_grid.is_rectangular = True
+        mock_grid.matches_dimensions = lambda rows, columns: True
         for i in range(self.mock_grid_x):
             mock_row = MagicMock()
             mock_row.items = []
@@ -38,6 +56,7 @@ class TestFileInterval(unittest.TestCase):
             self.grid,
             self.output_path,
             interval=self.interval,
+            expected_dimensions=(self.mock_grid_x, self.mock_grid_y),
             cleanup_queue=self.cleanup_queue,
             error_queue=self.error_queue,
         )
@@ -166,6 +185,52 @@ class TestFileInterval(unittest.TestCase):
 
         Timer_init.assert_called_once_with(self.handler.interval, self.handler.flush)
         Timer_start.assert_called_once()
+
+    def test_refuses_a_ragged_grid(self):
+        # a missed well has no honest place in the output, so we refuse the recording
+        # rather than write that well out as though the fly in it never moved
+        ragged = self.make_mock_grid(sizes=[3, 3, 2])
+
+        with self.assertRaises(ValueError) as caught:
+            FileIntervalHandler(
+                ragged,
+                self.output_path,
+                interval=self.interval,
+                expected_dimensions=(3, 3),
+            )
+
+        self.assertIn("[3, 3, 2]", str(caught.exception))
+
+    def test_refuses_a_uniform_grid_of_the_wrong_shape(self):
+        # a tilted grid read as one long row is perfectly rectangular, but every
+        # column in the output would refer to the wrong well
+        one_long_row = self.make_mock_grid(sizes=[9])
+        self.assertTrue(one_long_row.is_rectangular)
+
+        with self.assertRaises(ValueError) as caught:
+            FileIntervalHandler(
+                one_long_row,
+                self.output_path,
+                interval=self.interval,
+                expected_dimensions=(3, 3),
+            )
+
+        self.assertIn("3x3", str(caught.exception))
+
+    def test_refusing_a_bad_grid_leaves_the_output_file_alone(self):
+        # the constructor truncates the output file, so it matters that we bail first
+        self.mock_open.reset_mock()
+        ragged = self.make_mock_grid(sizes=[3, 3, 2])
+
+        with self.assertRaises(ValueError):
+            FileIntervalHandler(
+                ragged,
+                self.output_path,
+                interval=self.interval,
+                expected_dimensions=(3, 3),
+            )
+
+        self.mock_open.assert_not_called()
 
     def test_cancel(self):
         self.handler.timer = MagicMock()

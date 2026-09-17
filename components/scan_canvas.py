@@ -91,10 +91,29 @@ class ScanCanvas(FrameCanvas):
         frame = self.get_frame()[0]
         grid_detector = GridDetector(frame)
         try:
-            self.grid = grid_detector.detect()
-            self.record_button.config(state=tk.NORMAL)
+            grid = grid_detector.detect()
         except Exception as e:
             messagebox.showwarning("Detection Failed", str(e))
+            return
+
+        # keep the grid either way, so the overlay shows what was actually found
+        self.grid = grid
+        expected_rows = self.window.settings.get("grid.rows")
+        expected_columns = self.window.settings.get("grid.columns")
+        if not grid.matches_dimensions(expected_rows, expected_columns):
+            # either a well was missed, or the wells were grouped into the wrong
+            # number of rows. recording either one produces an output file whose
+            # columns don't mean what the analysis downstream assumes they mean
+            self.record_button.config(state=tk.DISABLED)
+            sizes = [len(row.items) for row in grid.rows]
+            messagebox.showwarning(
+                "Unexpected Grid",
+                f"Expected {expected_rows} rows of {expected_columns} wells, "
+                f"but found rows of {sizes} wells. "
+                "Adjust the lighting or camera and rescan before recording.",
+            )
+            return
+        self.record_button.config(state=tk.NORMAL)
 
     def resize_frame(self, frame):
         try:

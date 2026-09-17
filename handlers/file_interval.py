@@ -23,11 +23,22 @@ class FileIntervalHandler(MotionEventHandler):
         grid: Grid,
         filename: str,
         interval,
+        expected_dimensions,
         cleanup_queue=None,
         error_queue=None,
         record_images=False,
     ):
         self.timer = None
+        if not grid.matches_dimensions(*expected_dimensions):
+            # better to fail here than to start a run whose output misreports which
+            # well each column belongs to, or reports a well that was never detected
+            # as simply having no activity
+            expected_rows, expected_columns = expected_dimensions
+            raise ValueError(
+                f"Expected a {expected_rows}x{expected_columns} grid but rows "
+                f"contain {[len(row.items) for row in grid.rows]} wells. "
+                "Rescan before recording."
+            )
         self.grid = grid
         self.error_queue = error_queue
         if cleanup_queue is not None:

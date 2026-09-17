@@ -105,3 +105,17 @@ class Grid(GridComponent):
     @property
     def dimensions(self):
         return (len(self.rows), len(self.rows[0].items))
+
+    @property
+    def is_rectangular(self):
+        # detection can miss a well, which leaves one row shorter than the rest.
+        # downstream analysis reads the output as a fixed rectangle of wells, so a
+        # ragged grid has no honest representation there and we refuse it instead
+        return len(self.rows) > 0 and len({len(row.items) for row in self.rows}) == 1
+
+    def matches_dimensions(self, rows: int, columns: int):
+        # being rectangular isn't enough on its own. wells that get grouped into the
+        # wrong number of rows still come out uniform: a tilted grid read as a single
+        # row of 96 is perfectly rectangular, and silently reorders every column in
+        # the output. dimensions() only looks at the first row, so we need both checks
+        return self.is_rectangular and self.dimensions == (rows, columns)

@@ -5,6 +5,10 @@
     "width": 640,
     "height": 480
   },
+  "grid": {
+    "rows": 8,
+    "columns": 12
+  },
   "video": {
     "source": 0,
     "frame_delay": 30
