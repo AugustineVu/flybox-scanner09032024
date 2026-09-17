@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -62,3 +62,55 @@ class TestScanCanvasOverlay(unittest.TestCase):
             annotated_detector.average_radius,
             places=1,
         )
+
+
+def scan_canvas_with(grid, expected=(8, 12)):
+    canvas = MagicMock()
+    canvas.grid = grid
+    canvas.window.settings.get.side_effect = lambda key: {
+        "grid.rows": expected[0],
+        "grid.columns": expected[1],
+    }[key]
+    return canvas
+
+
+class TestScanCanvasCanRecord(unittest.TestCase):
+    def setUp(self):
+        self.grid = GridDetector(cv2.imread(GRID_FIXTURE)).detect()
+
+    def test_a_good_scan_can_record(self):
+        self.assertTrue(ScanCanvas.can_record(scan_canvas_with(self.grid)))
+
+    def test_no_grid_cannot_record(self):
+        # detection failing used to leave the previous grid in place
+        self.assertFalse(ScanCanvas.can_record(scan_canvas_with(None)))
+
+    def test_a_grid_of_the_wrong_shape_cannot_record(self):
+        self.assertFalse(
+            ScanCanvas.can_record(scan_canvas_with(self.grid, expected=(6, 16)))
+        )
+
+
+class TestScanCanvasStartRecording(unittest.TestCase):
+    # --tuning motion calls start_recording directly, skipping the Record button,
+    # so the button being disabled is not enough to stop a bad grid getting through
+    def test_refuses_to_start_without_a_usable_grid(self):
+        canvas = MagicMock()
+        canvas.can_record.return_value = False
+
+        with patch("components.scan_canvas.messagebox") as messagebox:
+            ScanCanvas.start_recording(canvas)
+
+        canvas.window.state_manager.record.assert_not_called()
+        self.assertNotIn("grid", canvas.window.app_state)
+        messagebox.showwarning.assert_called_once()
+
+    def test_starts_recording_when_the_scan_is_good(self):
+        canvas = MagicMock()
+        canvas.can_record.return_value = True
+        canvas.window.app_state = {}
+
+        ScanCanvas.start_recording(canvas)
+
+        canvas.window.state_manager.record.assert_called_once()
+        self.assertIs(canvas.window.app_state["grid"], canvas.grid)

@@ -22,18 +22,12 @@ class ScanCanvas(FrameCanvas):
         self.hidden = False
         self.border_detector = BorderDetector()
 
-        def start_recording():
-            # only set grid here now that it's confirmed
-            self.window.app_state["grid"] = self.grid
-            self.window.app_state["record_images"] = self.record_images.get()
-            self.window.state_manager.record()
-
         self.button_frame = tk.Frame()
         self.rescan_button = tk.Button(
             self.button_frame, text="Rescan", command=self.detect_grid
         )
         self.record_button = tk.Button(
-            self.button_frame, text="Record", command=start_recording
+            self.button_frame, text="Record", command=self.start_recording
         )
         # start disabled
         self.record_button.config(state=tk.DISABLED)
@@ -50,8 +44,10 @@ class ScanCanvas(FrameCanvas):
 
         self.detect_grid()
         if window.tuning_mode == "motion":
-            # need to schedule this to avoid updating a dead canvas
-            self.window.after_idle(start_recording)
+            # need to schedule this to avoid updating a dead canvas.
+            # this skips the Record button entirely, so start_recording has to do its
+            # own checking rather than trusting that the button was clickable
+            self.window.after_idle(self.start_recording)
 
     def layout(self):
         super().grid()
@@ -60,6 +56,29 @@ class ScanCanvas(FrameCanvas):
         self.record_button.grid(row=0, column=1)
         self.cancel_button.grid(row=0, column=2)
         self.record_images_checkbox.grid(row=1, column=0, columnspan=3)
+
+    def can_record(self):
+        # the single answer to "is this scan good enough to record", used both to set
+        # the Record button's state and to check again when recording actually starts
+        if self.grid is None:
+            return False
+        return self.grid.matches_dimensions(
+            self.window.settings.get("grid.rows"),
+            self.window.settings.get("grid.columns"),
+        )
+
+    def start_recording(self):
+        if not self.can_record():
+            # reachable without the button: --tuning motion calls this directly
+            messagebox.showwarning(
+                "Cannot Record",
+                "No usable grid was detected. Rescan before recording.",
+            )
+            return
+        # only set grid here now that it's confirmed
+        self.window.app_state["grid"] = self.grid
+        self.window.app_state["record_images"] = self.record_images.get()
+        self.window.state_manager.record()
 
     def draw_grid(self, frame):
         # this is display only. it must not run before detection, or a rescan ends up
@@ -93,6 +112,10 @@ class ScanCanvas(FrameCanvas):
         try:
             grid = grid_detector.detect()
         except Exception as e:
+            # drop whatever the last scan found: recording against a grid detected
+            # from an older frame is worse than refusing to record at all
+            self.grid = None
+            self.record_button.config(state=tk.DISABLED)
             messagebox.showwarning("Detection Failed", str(e))
             return
 
@@ -100,7 +123,7 @@ class ScanCanvas(FrameCanvas):
         self.grid = grid
         expected_rows = self.window.settings.get("grid.rows")
         expected_columns = self.window.settings.get("grid.columns")
-        if not grid.matches_dimensions(expected_rows, expected_columns):
+        if not self.can_record():
             # either a well was missed, or the wells were grouped into the wrong
             # number of rows. recording either one produces an output file whose
             # columns don't mean what the analysis downstream assumes they mean
