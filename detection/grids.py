@@ -116,8 +116,8 @@ class GridDetector:
             if abs(average_radius - last_average_radius) < CONVERGENCE_THRESHOLD:
                 break
 
-            min_radius = int(average_radius * INITIAL_DETECTION_UPPER_BOUND)
-            max_radius = int(average_radius * INITIAL_DETECTION_LOWER_BOUND)
+            min_radius = int(average_radius * INITIAL_DETECTION_LOWER_BOUND)
+            max_radius = int(average_radius * INITIAL_DETECTION_UPPER_BOUND)
             min_dist = min_radius * 2
             last_average_radius = average_radius
 
