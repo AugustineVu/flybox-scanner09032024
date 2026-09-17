@@ -35,6 +35,10 @@ class MotionDetector:
         self.history = self.settings.get("motion.history")
         self.dist2_threshold = self.settings.get("motion.dist2_threshold")
         self.diff_threshold = self.settings.get("motion.diff_threshold")
+        self.min_contour_area = self.settings.get("motion.min_contour_area")
+        self.max_contour_area_fraction = self.settings.get(
+            "motion.max_contour_area_fraction"
+        )
         self.bg_reinit_threshold = self.settings.get("motion.bg_reinit_threshold")
         self.bg_reinit_throttle = self.settings.get("motion.bg_reinit_throttle")
 
@@ -52,7 +56,17 @@ class MotionDetector:
         (contours, _) = cv2.findContours(
             frame, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-        return contours
+        # two things in here are never a fly. the subtractor returns a mask covering
+        # most of the frame when it reinitialises on a lighting change, and it emits a
+        # steady trickle of specks. a speck with zero area doesn't even have a centre:
+        # get_contour_center can't take moments of it and falls back to an arbitrary
+        # vertex, so whatever distance we measure from it is meaningless
+        max_area = self.max_contour_area_fraction * frame.shape[0] * frame.shape[1]
+        return [
+            contour
+            for contour in contours
+            if self.min_contour_area <= cv2.contourArea(contour) <= max_area
+        ]
 
     def detect_with_bg_subtractor(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
