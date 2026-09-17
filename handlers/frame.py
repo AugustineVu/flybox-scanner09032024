@@ -18,7 +18,10 @@ class FrameHandler(MotionEvent):
         self.motion_detector = MotionDetector(settings)
         self.handler = handler
 
+        # the point carried over from the previous frame, per well
         self.points: Dict[tuple, MotionPoint] = {}
+        # the best point seen so far in the frame being processed, per well
+        self.frame_points: Dict[tuple, MotionPoint] = {}
         self.average = 0
 
     def find_item(self, center):
@@ -27,42 +30,44 @@ class FrameHandler(MotionEvent):
             return
         return row.find_item(center)
 
-    def handle_contour(self, contour, frame, raw_frame, frame_count: int):
+    def handle_contour(self, contour, frame_count: int):
+        # note that this does not emit anything: it only picks the contour that
+        # represents the fly in each well for this frame. emitting as contours arrive
+        # would measure the gap between two blobs of the *same* frame as movement
         item = self.find_item(get_contour_center(contour))
         if item is None:
             return
 
         point = MotionPoint(contour, item, frame_count)
         coords = point.item.coords
-        last_point = self.points.get(coords)
-        if last_point is None:
-            self.points[coords] = point
-            return
-
         # if we have multiple points in the same frame, we only want to keep the largest one
         # we'll need to change this if we ever want to capture multiple flies in a single well
-        if point.frame_count == last_point.frame_count and point.area < last_point.area:
-            return
-
-        # emit event
-        event = MotionEvent(
-            point=point,
-            last_point=last_point,
-            item=item,
-            frame=frame,
-            raw_frame=raw_frame,
-        )
-        self.handler.handle(event)
-
-        self.points[coords] = point
+        best_point = self.frame_points.get(coords)
+        if best_point is None or point.area > best_point.area:
+            self.frame_points[coords] = point
 
     def handle(self, frame, frame_count: int):
         contours = self.motion_detector.detect(frame)
         # this is a copy of the original frame used for image recording
         # don't modify it!
         raw_frame = frame.copy()
+        # reset per-frame state, then pick one point per well
+        self.frame_points = {}
         for contour in contours:
-            self.handle_contour(contour, frame, raw_frame, frame_count)
+            self.handle_contour(contour, frame_count)
+        # now that the frame is resolved, measure against the previous frame's point
+        for coords, point in self.frame_points.items():
+            last_point = self.points.get(coords)
+            if last_point is not None:
+                event = MotionEvent(
+                    point=point,
+                    last_point=last_point,
+                    item=point.item,
+                    frame=frame,
+                    raw_frame=raw_frame,
+                )
+                self.handler.handle(event)
+            self.points[coords] = point
         # HACK: move this after contour detection so that changes to the frame don't affect detection
         # the fact that the same frame is used for detection *and* display is itself bad,
         # but this works for now
