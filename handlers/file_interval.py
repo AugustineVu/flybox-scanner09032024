@@ -34,6 +34,10 @@ class FileIntervalHandler(MotionEventHandler):
         cleanup_queue=None,
         record_images=False,
     ):
+        # MotionEventHandler sets up on_frame, which FrameHandler calls on every
+        # frame. this only ever worked because a DebugHandler was always wrapped
+        # around this one in the app and supplied it
+        super().__init__()
         self.timer = None
         self.cancelled = False
         if not grid.matches_dimensions(*expected_dimensions):

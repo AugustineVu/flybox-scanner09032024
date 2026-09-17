@@ -220,6 +220,11 @@ class TestFileInterval(unittest.TestCase):
 
         self.mock_open.assert_not_called()
 
+    def test_satisfies_the_motion_event_handler_contract(self):
+        # FrameHandler reads on_frame off whatever handler it is given, so a recorder
+        # used without a DebugHandler wrapped round it has to provide one
+        self.assertIsNone(self.handler.on_frame)
+
     def test_interval_is_floored_at_one_second(self):
         # Timer(0, ...) fires immediately, so a sub-second interval used to turn the
         # flush into a tight loop rather than a slow one
