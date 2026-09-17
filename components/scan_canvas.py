@@ -61,10 +61,11 @@ class ScanCanvas(FrameCanvas):
         self.cancel_button.grid(row=0, column=2)
         self.record_images_checkbox.grid(row=1, column=0, columnspan=3)
 
-    def get_frame(self):
-        frame, frame_count = super().get_frame()
+    def draw_grid(self, frame):
+        # this is display only. it must not run before detection, or a rescan ends up
+        # looking for circles in the rectangles the previous scan drew
         if self.grid is None:
-            return frame, frame_count
+            return
 
         for row in self.grid.rows:
             for item in row.items:
@@ -85,7 +86,6 @@ class ScanCanvas(FrameCanvas):
             (0, 255, 0),
             thickness=2,
         )
-        return frame, frame_count
 
     def detect_grid(self):
         frame = self.get_frame()[0]
@@ -125,4 +125,8 @@ class ScanCanvas(FrameCanvas):
         return super().resize_frame(frame)
 
     def update(self):
-        super().update()
+        # draw the overlay here rather than in get_frame, so that detect_grid gets
+        # a frame straight from the camera instead of one we've already drawn on
+        frame = self.get_frame()[0]
+        self.draw_grid(frame)
+        self.show_frame(frame)
