@@ -40,7 +40,6 @@ class RecordCanvas(FrameCanvas):
                 grid,
                 self.filename,
                 cleanup_queue=window.cleanup,
-                error_queue=window.errors,
                 interval=window.settings.get("recording.interval"),
                 expected_dimensions=(
                     window.settings.get("grid.rows"),

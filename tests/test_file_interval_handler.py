@@ -1,4 +1,7 @@
 import datetime
+import os
+import shutil
+import tempfile
 import unittest
 from queue import SimpleQueue
 from threading import Timer
@@ -50,7 +53,6 @@ class TestFileInterval(unittest.TestCase):
         self.patcher.start()
 
         self.cleanup_queue = SimpleQueue()
-        self.error_queue = SimpleQueue()
         self.grid = self.make_mock_grid()
         self.handler = FileIntervalHandler(
             self.grid,
@@ -58,7 +60,6 @@ class TestFileInterval(unittest.TestCase):
             interval=self.interval,
             expected_dimensions=(self.mock_grid_x, self.mock_grid_y),
             cleanup_queue=self.cleanup_queue,
-            error_queue=self.error_queue,
         )
 
         # replace with mock to be safe,
@@ -168,14 +169,17 @@ class TestFileInterval(unittest.TestCase):
         self.assertEqual(self.handler.distances[(0, 0)], 0)
 
     def test_flush_error(self):
+        # a failed save is recorded and counted, never raised at the UI thread
         self.handler.write_data = MagicMock(side_effect=Exception)
         self.handler.start = MagicMock()
+        self.handler.log_problem = MagicMock()
 
         self.handler.flush()
         self.handler.flush()
         self.handler.flush()
 
-        self.assertEqual(self.error_queue.qsize(), 3)
+        self.assertEqual(self.handler.failed_writes, 3)
+        self.assertEqual(self.handler.log_problem.call_count, 3)
 
     # do *not* use real timers unless you hate yourself
     @patch.object(Timer, "start")
@@ -201,23 +205,7 @@ class TestFileInterval(unittest.TestCase):
 
         self.assertIn("[3, 3, 2]", str(caught.exception))
 
-    def test_refuses_a_uniform_grid_of_the_wrong_shape(self):
-        # a tilted grid read as one long row is perfectly rectangular, but every
-        # column in the output would refer to the wrong well
-        one_long_row = self.make_mock_grid(sizes=[9])
-        self.assertTrue(one_long_row.is_rectangular)
-
-        with self.assertRaises(ValueError) as caught:
-            FileIntervalHandler(
-                one_long_row,
-                self.output_path,
-                interval=self.interval,
-                expected_dimensions=(3, 3),
-            )
-
-        self.assertIn("3x3", str(caught.exception))
-
-    def test_refusing_a_bad_grid_leaves_the_output_file_alone(self):
+    def test_refusing_a_ragged_grid_leaves_the_output_file_alone(self):
         # the constructor truncates the output file, so it matters that we bail first
         self.mock_open.reset_mock()
         ragged = self.make_mock_grid(sizes=[3, 3, 2])
@@ -263,7 +251,7 @@ class TestFileInterval(unittest.TestCase):
         self.handler.flush()
 
         self.handler.start.assert_called_once()
-        self.assertEqual(self.error_queue.qsize(), 1)
+        self.assertEqual(self.handler.failed_writes, 1)
 
     def test_recovers_once_writing_works_again(self):
         self.handler.start = MagicMock()
@@ -284,6 +272,22 @@ class TestFileInterval(unittest.TestCase):
 
         self.assertTrue(self.handler.cancelled)
         self.assertIsNone(self.handler.timer)
+
+    def test_refuses_a_uniform_grid_of_the_wrong_shape(self):
+        # a tilted grid read as one long row is perfectly rectangular, but every
+        # column in the output would refer to the wrong well
+        one_long_row = self.make_mock_grid(sizes=[9])
+        self.assertTrue(one_long_row.is_rectangular)
+
+        with self.assertRaises(ValueError) as caught:
+            FileIntervalHandler(
+                one_long_row,
+                self.output_path,
+                interval=self.interval,
+                expected_dimensions=(3, 3),
+            )
+
+        self.assertIn("3x3", str(caught.exception))
 
     def test_cancel(self):
         self.handler.timer = MagicMock()
@@ -353,3 +357,98 @@ class TestFileIntervalImages(unittest.TestCase):
             self.assertEqual(imwrite.call_count, 1)
             self.handler.write_data()
             self.assertEqual(imwrite.call_count, 1)
+
+
+class TestFileIntervalFailureHandling(unittest.TestCase):
+    # a failed save must not end the run, must not lose the interval, and must leave
+    # something behind that says it happened
+    def setUp(self):
+        self.directory = tempfile.mkdtemp()
+        self.output_path = os.path.join(self.directory, "out.txt")
+        grid = MagicMock()
+        grid.is_rectangular = True
+        grid.matches_dimensions = lambda rows, columns: True
+        row = MagicMock()
+        row.items = []
+        for j in range(3):
+            item = MagicMock()
+            item.coords = (0, j)
+            row.items.append(item)
+        grid.rows = [row]
+        self.handler = FileIntervalHandler(
+            grid, self.output_path, interval=60, expected_dimensions=(1, 3)
+        )
+        self.handler.start = MagicMock()
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def rows_written(self):
+        with open(self.output_path) as f:
+            return [line for line in f.read().splitlines() if line]
+
+    def fail_next_write(self, message="disk full"):
+        # fail only the output file, the way a locked or unwritable file behaves.
+        # failing every open would also take out the error log, which is a different
+        # and much rarer situation
+        real_open = open
+
+        def selective_open(path, *args, **kwargs):
+            if str(path) == self.output_path:
+                raise IOError(message)
+            return real_open(path, *args, **kwargs)
+
+        return patch("builtins.open", side_effect=selective_open)
+
+    def test_a_failed_interval_is_saved_by_the_next_one(self):
+        self.handler.flush()
+        with self.fail_next_write():
+            self.handler.flush()
+        self.assertEqual(len(self.rows_written()), 1)
+
+        self.handler.flush()
+
+        # all three intervals present, in order, none silently dropped
+        rows = self.rows_written()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row.split(DELIMITER)[0] for row in rows], ["1", "2", "3"])
+
+    def test_the_run_keeps_going_through_repeated_failures(self):
+        for _ in range(4):
+            with self.fail_next_write():
+                self.handler.flush()
+
+        self.assertEqual(self.handler.failed_writes, 4)
+        self.assertEqual(self.handler.start.call_count, 4)
+        self.assertEqual(len(self.handler.pending_rows), 4)
+
+    def test_a_failure_is_written_to_a_log_beside_the_output(self):
+        self.assertFalse(os.path.exists(self.handler.error_log))
+
+        with self.fail_next_write("no space left on device"):
+            self.handler.flush()
+
+        self.assertTrue(os.path.exists(self.handler.error_log))
+        with open(self.handler.error_log) as f:
+            logged = f.read()
+        self.assertIn("no space left on device", logged)
+        self.assertIn("interval 1", logged)
+
+    def test_held_rows_are_saved_when_the_run_stops(self):
+        with self.fail_next_write():
+            self.handler.flush()
+        self.assertEqual(len(self.rows_written()), 0)
+
+        self.handler.cancel()
+
+        self.assertEqual(len(self.rows_written()), 1)
+        self.assertEqual(self.handler.pending_rows, [])
+
+    def test_held_rows_are_capped(self):
+        from handlers.file_interval import MAX_PENDING_ROWS
+
+        self.handler.pending_rows = ["row"] * (MAX_PENDING_ROWS + 5)
+
+        self.handler.record_failure(IOError("still broken"))
+
+        self.assertEqual(len(self.handler.pending_rows), MAX_PENDING_ROWS)

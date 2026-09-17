@@ -12,6 +12,13 @@ from custom_types.motion import MotionEvent, MotionEventHandler
 # output file options
 # see the make_row method for more info
 DATE_FORMAT = "%d %b %y"
+# problems during a run go here, next to the output file. the file is only created
+# when something actually goes wrong, so its presence is itself the warning sign
+ERROR_LOG_SUFFIX = ".errors.log"
+LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+# a failed write keeps its row so the next flush can save it. cap how many we hold,
+# so a disk that never comes back can't grow this without bound
+MAX_PENDING_ROWS = 2880
 TIME_FORMAT = "%H:%M:00"
 DELIMITER = "\t"
 
@@ -25,7 +32,6 @@ class FileIntervalHandler(MotionEventHandler):
         interval,
         expected_dimensions,
         cleanup_queue=None,
-        error_queue=None,
         record_images=False,
     ):
         self.timer = None
@@ -41,7 +47,9 @@ class FileIntervalHandler(MotionEventHandler):
                 "Rescan before recording."
             )
         self.grid = grid
-        self.error_queue = error_queue
+        # rows that could not be saved yet, oldest first
+        self.pending_rows = []
+        self.failed_writes = 0
         if cleanup_queue is not None:
             cleanup_queue.put(self.cancel)
         self.raw_frame = None
@@ -51,6 +59,7 @@ class FileIntervalHandler(MotionEventHandler):
         self.max_y = max(key[1] for key in self.distances)
 
         self.filename = filename
+        self.error_log = os.path.splitext(filename)[0] + ERROR_LOG_SUFFIX
         self.record_images = record_images
         if self.record_images:
             self.frames_dir = os.path.join(os.path.dirname(filename), "frames")
@@ -80,6 +89,23 @@ class FileIntervalHandler(MotionEventHandler):
         self.cancelled = True
         if self.timer is not None:
             self.timer.cancel()
+        self.save_pending()
+
+    def save_pending(self):
+        # last chance to get held rows onto disk. without this, intervals that were
+        # waiting on a retry would disappear when the run ends
+        if not self.pending_rows:
+            return
+        try:
+            with open(self.filename, "a") as f:
+                f.write("".join(row + "\n" for row in self.pending_rows))
+            self.log_problem(f"saved {len(self.pending_rows)} held interval(s) on stop")
+            self.pending_rows = []
+        except Exception as error:
+            self.log_problem(
+                f"lost {len(self.pending_rows)} unsaved interval(s) on stop: "
+                f"{type(error).__name__}: {error}"
+            )
 
     def handle(self, event: MotionEvent):
         self.distances[event.item.coords] += event.distance
@@ -115,14 +141,48 @@ class FileIntervalHandler(MotionEventHandler):
         for y in range(self.max_y + 1):
             for x in range(self.max_x + 1):
                 coords = (x, y)
+                # the constructor rejects ragged grids, so every coordinate in this
+                # rectangle exists. index directly, so that if that ever stops holding
+                # we hear about it instead of writing a well out as zero activity
                 row_parts.append(int(self.distances[coords]))
 
         return DELIMITER.join(map(str, row_parts))
 
+    def log_problem(self, message):
+        stamp = datetime.datetime.now().strftime(LOG_TIME_FORMAT)
+        line = f"{stamp}{DELIMITER}{message}"
+        print(f"[flybox] {line}")
+        try:
+            with open(self.error_log, "a") as f:
+                f.write(line + "\n")
+        except Exception:
+            # the log is a convenience. it must never be the thing that ends a run
+            pass
+
+    def record_failure(self, error):
+        self.failed_writes += 1
+        if len(self.pending_rows) > MAX_PENDING_ROWS:
+            dropped = len(self.pending_rows) - MAX_PENDING_ROWS
+            del self.pending_rows[:dropped]
+            self.log_problem(
+                f"gave up on {dropped} unsaved interval(s) to keep memory bounded"
+            )
+        self.log_problem(
+            f"could not write interval {self.index}: "
+            f"{type(error).__name__}: {error}. "
+            f"holding {len(self.pending_rows)} interval(s) for the next attempt"
+        )
+
     def write_data(self):
-        row = self.make_row()
+        # hold the row rather than write it straight out, so a write that fails costs
+        # us nothing: the next flush saves this interval along with its own
+        self.pending_rows.append(self.make_row())
+        held = len(self.pending_rows) - 1
         with open(self.filename, "a") as f:
-            f.write(row + "\n")
+            f.write("".join(row + "\n" for row in self.pending_rows))
+        self.pending_rows = []
+        if held:
+            self.log_problem(f"writing again, and saved {held} held interval(s)")
         if self.record_images:
             self.write_image()
 
@@ -141,10 +201,12 @@ class FileIntervalHandler(MotionEventHandler):
         self.last_flush = datetime.datetime.now()
         try:
             self.write_data()
-        except Exception as e:
-            # since we're running in a thread, we add them to the queue to be handled on the next loop
-            if self.error_queue is not None:
-                self.error_queue.put(e)
+        except Exception as error:
+            # deliberately not fatal. losing one interval is bad, losing the rest of
+            # an overnight run because one save failed is far worse, so we note it and
+            # carry on. anything that makes the run impossible at all has already
+            # raised from the constructor, before recording started
+            self.record_failure(error)
         finally:
             # reschedule no matter what. an interval that fails to write costs us that
             # interval, but it used to cost every interval after it as well
