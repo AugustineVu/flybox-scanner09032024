@@ -120,10 +120,17 @@ class FileIntervalHandler(MotionEventHandler):
         with open(self.filename, "a") as f:
             f.write(row + "\n")
         if self.record_images:
-            timestamp = self.last_flush.strftime("%Y%m%d%H%M%S")
-            cv2.imwrite(
-                os.path.join(self.frames_dir, f"{timestamp}.jpg"), self.raw_frame
-            )
+            self.write_image()
+
+    def write_image(self):
+        # nothing moved during this interval, so we never captured a frame for it.
+        # skip the image rather than crash, and rather than writing out the previous
+        # interval's frame under this interval's timestamp
+        if self.raw_frame is None:
+            return
+        timestamp = self.last_flush.strftime("%Y%m%d%H%M%S")
+        cv2.imwrite(os.path.join(self.frames_dir, f"{timestamp}.jpg"), self.raw_frame)
+        self.raw_frame = None
 
     def flush(self):
         self.index += 1

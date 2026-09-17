@@ -268,3 +268,65 @@ class TestFileInterval(unittest.TestCase):
         self.handler.cancel()
 
         self.handler.timer.cancel.assert_called_once()
+
+
+class TestFileIntervalImages(unittest.TestCase):
+    output_path = "tests/fixtures/test_output.txt"
+
+    def make_grid(self):
+        grid = MagicMock()
+        grid.is_rectangular = True
+        grid.matches_dimensions = lambda rows, columns: True
+        row = MagicMock()
+        row.items = []
+        for j in range(2):
+            item = MagicMock()
+            item.coords = (0, j)
+            row.items.append(item)
+        grid.rows = [row]
+        return grid
+
+    def setUp(self):
+        # stop only our own patchers: patch.stopall() would also tear down patchers
+        # belonging to other test classes and let them write real files
+        for patcher in (patch("builtins.open", mock_open()), patch("os.makedirs")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.handler = FileIntervalHandler(
+            self.make_grid(),
+            self.output_path,
+            interval=10,
+            expected_dimensions=(1, 2),
+            record_images=True,
+        )
+        self.handler.start = MagicMock()
+
+    def test_skips_the_image_when_nothing_moved(self):
+        # no motion means handle() never ran, so there is no frame for this interval.
+        # write_data used to hand that None straight to cv2.imwrite and blow up
+        self.assertIsNone(self.handler.raw_frame)
+
+        with patch("cv2.imwrite") as imwrite:
+            self.handler.write_data()
+
+        imwrite.assert_not_called()
+
+    def test_writes_the_image_when_something_moved(self):
+        frame = MagicMock()
+        self.handler.raw_frame = frame
+
+        with patch("cv2.imwrite") as imwrite:
+            self.handler.write_data()
+
+        imwrite.assert_called_once()
+        self.assertIs(imwrite.call_args[0][1], frame)
+
+    def test_does_not_reuse_the_previous_intervals_frame(self):
+        # writing the last frame we saw under a later timestamp would be a lie
+        self.handler.raw_frame = MagicMock()
+
+        with patch("cv2.imwrite") as imwrite:
+            self.handler.write_data()
+            self.assertEqual(imwrite.call_count, 1)
+            self.handler.write_data()
+            self.assertEqual(imwrite.call_count, 1)
