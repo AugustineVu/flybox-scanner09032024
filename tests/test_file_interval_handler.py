@@ -232,6 +232,29 @@ class TestFileInterval(unittest.TestCase):
 
         self.mock_open.assert_not_called()
 
+    def test_interval_is_floored_at_one_second(self):
+        # Timer(0, ...) fires immediately, so a sub-second interval used to turn the
+        # flush into a tight loop rather than a slow one
+        for given in (0, 0.3, "0.5", -5):
+            with self.subTest(interval=given):
+                handler = FileIntervalHandler(
+                    self.make_mock_grid(),
+                    self.output_path,
+                    interval=given,
+                    expected_dimensions=(3, 3),
+                )
+                self.assertEqual(handler.interval, 1)
+
+    def test_a_normal_interval_is_left_alone(self):
+        handler = FileIntervalHandler(
+            self.make_mock_grid(),
+            self.output_path,
+            interval=60,
+            expected_dimensions=(3, 3),
+        )
+
+        self.assertEqual(handler.interval, 60)
+
     def test_keeps_recording_after_a_failed_write(self):
         # a write that fails used to skip the reschedule, which quietly ended the run
         self.handler.write_data = MagicMock(side_effect=Exception("disk on fire"))

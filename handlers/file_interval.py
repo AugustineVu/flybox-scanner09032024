@@ -56,7 +56,11 @@ class FileIntervalHandler(MotionEventHandler):
             self.frames_dir = os.path.join(os.path.dirname(filename), "frames")
             os.makedirs(self.frames_dir, exist_ok=True)
         # TODO: move to schema in app settings
-        self.interval = int(interval)
+        # floor this at a second. Timer(0, ...) fires immediately, so an interval that
+        # rounds down to zero turns the flush into a tight loop that pegs a core and
+        # writes thousands of rows. float() first so that a fractional interval from
+        # the environment lands on the floor instead of raising
+        self.interval = max(1, int(float(interval)))
         self.index = 0
         self.last_flush = datetime.datetime.now()
 
