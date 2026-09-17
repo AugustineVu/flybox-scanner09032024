@@ -34,7 +34,6 @@ class MotionDetector:
         self.blur_size = self.settings.get("motion.blur_size")
         self.history = self.settings.get("motion.history")
         self.dist2_threshold = self.settings.get("motion.dist2_threshold")
-        self.diff_threshold = self.settings.get("motion.diff_threshold")
         self.min_contour_area = self.settings.get("motion.min_contour_area")
         self.max_contour_area_fraction = self.settings.get(
             "motion.max_contour_area_fraction"
@@ -80,24 +79,6 @@ class MotionDetector:
         contours = self.find_contours(mask)
         self.last_mean = mean
         return contours
-
-    def detect_with_diff(self, frame):
-        # NOTE: not currently functioning
-        # small caveat: we drop the first frame
-        # if we use this and want to get really picky about timing, we'll want to wait before recording
-        if self.last_frame is None:
-            self.last_frame = frame.copy()
-            return []
-
-        grayA = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        grayB = cv2.cvtColor(self.last_frame, cv2.COLOR_BGR2GRAY)
-        diff = cv2.absdiff(grayB, grayA)
-        _, thresh = cv2.threshold(diff, self.diff_threshold, 255, cv2.THRESH_BINARY)
-        # we use dilation instead of closing, since we want to expand the area of motion for contour detection
-        thresh = cv2.dilate(thresh, iterations=2)
-
-        self.last_frame = frame.copy()
-        return self.find_contours(thresh)
 
     def detect(self, frame):
         if self.method == "BG_SUBTRACTOR":

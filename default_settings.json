@@ -22,7 +22,6 @@
     "dist2_threshold": 165,
     "kernel_size": 12,
     "blur_size": 5,
-    "diff_threshold": 15,
     "bg_reinit_threshold": 1,
     "bg_reinit_throttle": 5,
     "min_contour_area": 1,
