@@ -29,6 +29,7 @@ class FileIntervalHandler(MotionEventHandler):
         record_images=False,
     ):
         self.timer = None
+        self.cancelled = False
         if not grid.matches_dimensions(*expected_dimensions):
             # better to fail here than to start a run whose output misreports which
             # well each column belongs to, or reports a well that was never detected
@@ -64,10 +65,15 @@ class FileIntervalHandler(MotionEventHandler):
             f.write("")
 
     def start(self):
+        # a flush that lands while we're shutting down would otherwise queue up
+        # another timer behind cancel() and keep the process alive
+        if self.cancelled:
+            return
         self.timer = Timer(self.interval, self.flush)
         self.timer.start()
 
     def cancel(self):
+        self.cancelled = True
         if self.timer is not None:
             self.timer.cancel()
 
@@ -124,10 +130,13 @@ class FileIntervalHandler(MotionEventHandler):
         self.last_flush = datetime.datetime.now()
         try:
             self.write_data()
-            self.start()
         except Exception as e:
             # since we're running in a thread, we add them to the queue to be handled on the next loop
             if self.error_queue is not None:
                 self.error_queue.put(e)
+        finally:
+            # reschedule no matter what. an interval that fails to write costs us that
+            # interval, but it used to cost every interval after it as well
+            self.start()
 
         self.distances = self.make_distances()

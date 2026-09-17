@@ -232,6 +232,36 @@ class TestFileInterval(unittest.TestCase):
 
         self.mock_open.assert_not_called()
 
+    def test_keeps_recording_after_a_failed_write(self):
+        # a write that fails used to skip the reschedule, which quietly ended the run
+        self.handler.write_data = MagicMock(side_effect=Exception("disk on fire"))
+        self.handler.start = MagicMock()
+
+        self.handler.flush()
+
+        self.handler.start.assert_called_once()
+        self.assertEqual(self.error_queue.qsize(), 1)
+
+    def test_recovers_once_writing_works_again(self):
+        self.handler.start = MagicMock()
+        self.handler.write_data = MagicMock(side_effect=Exception("transient"))
+        self.handler.flush()
+        self.handler.write_data = MagicMock()
+
+        self.handler.flush()
+
+        self.assertEqual(self.handler.write_data.call_count, 1)
+        self.assertEqual(self.handler.start.call_count, 2)
+
+    def test_does_not_reschedule_once_cancelled(self):
+        # flush always reschedules now, so cancel has to be the thing that stops it
+        self.handler.cancel()
+
+        self.real_start()
+
+        self.assertTrue(self.handler.cancelled)
+        self.assertIsNone(self.handler.timer)
+
     def test_cancel(self):
         self.handler.timer = MagicMock()
 
