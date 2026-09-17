@@ -9,6 +9,10 @@ from utils.app_settings import AppSettings
 
 class TestMotionDetector(unittest.TestCase):
     def setUp(self):
+        # the KNN subtractor replaces samples in its model using the global OpenCV
+        # RNG, and that state carries between tests. without pinning it, the exact
+        # contour count below depends on what ran earlier in the process
+        cv2.setRNGSeed(0)
         self.settings = AppSettings(keep_defaults=True)
         self.detector = MotionDetector(self.settings)
 
