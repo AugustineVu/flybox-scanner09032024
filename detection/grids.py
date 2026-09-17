@@ -63,6 +63,14 @@ FINAL_DETECTION_PARAM_2 = 20
 # while setting it to 0 will let all circles keep their original detected size
 AVERAGE_RADIUS_ALPHA = 0.75
 
+# no camera setup is perfectly level, so we work out how far the grid is rotated
+# and undo it before sorting wells into rows. we estimate the rotation from the
+# angle between neighbouring wells, which means we need to know which wells are
+# neighbours: this is how far apart (in average radii) two wells can sit and still
+# count as adjacent. one pitch is a little over 2 radii, and a diagonal neighbour is
+# about 3.2, so 3 catches the real neighbours without pulling in diagonals
+NEIGHBOUR_DISTANCE_FACTOR = 3
+
 
 class GridDetector:
     def __init__(self, frame):
@@ -72,6 +80,7 @@ class GridDetector:
         self.processed_frame = None
         self.circles = None
         self.average_radius = None
+        self.tilt = None
         self.grid = None
 
     def process_frame(self):
@@ -145,13 +154,50 @@ class GridDetector:
         circles = detected[0]
         return circles
 
+    def estimate_tilt(self):
+        # the angle, in radians, that the grid's rows are rotated by.
+        # we look at every pair of neighbouring wells and keep the ones that sit
+        # side by side rather than one above the other: those pairs point along a row,
+        # so the median of their angles is the tilt of the grid as a whole.
+        # taking the median means a few bad detections can't drag the estimate around
+        max_distance = NEIGHBOUR_DISTANCE_FACTOR * self.average_radius
+        centers = self.circles[:, :2]
+        angles = []
+        for index, (x1, y1) in enumerate(centers):
+            for x2, y2 in centers[index + 1 :]:
+                dx = x2 - x1
+                dy = y2 - y1
+                # always measure left to right, so angles don't wrap around at 180
+                if dx < 0:
+                    dx, dy = -dx, -dy
+                # a pair that's more vertical than horizontal is a column neighbour,
+                # which tells us nothing about which way the rows run
+                if dx <= abs(dy):
+                    continue
+                if (dx * dx) + (dy * dy) > max_distance * max_distance:
+                    continue
+                angles.append(np.arctan2(dy, dx))
+        if len(angles) == 0:
+            # nothing to go on, so assume the grid is level
+            return 0.0
+        return float(np.median(angles))
+
     def detect(self):
         self.processed_frame = self.process_frame()
         self.circles = self.detect_circles()
         self.average_radius = np.average(self.circles[:, 2])
+        self.tilt = self.estimate_tilt()
 
-        grid = [[]]
-        for x, y, radius in sorted(self.circles, key=lambda circle: circle[1]):
+        # group wells into rows in a frame rotated to undo the tilt. sorting by raw y
+        # interleaves rows as soon as the camera is even slightly off level, because a
+        # well at the far end of one row can sit higher than the near end of the next.
+        # the wells themselves keep their original coordinates: only the grouping and
+        # ordering happen in the rotated frame
+        cos_tilt = np.cos(-self.tilt)
+        sin_tilt = np.sin(-self.tilt)
+
+        wells = []
+        for x, y, radius in self.circles:
             radius = (radius * (1 - AVERAGE_RADIUS_ALPHA)) + (
                 self.average_radius * AVERAGE_RADIUS_ALPHA
             )
@@ -165,29 +211,40 @@ class GridDetector:
                     y + radius,
                 ),
             )
+            wells.append(
+                (
+                    (x * cos_tilt) - (y * sin_tilt),
+                    (x * sin_tilt) + (y * cos_tilt),
+                    item,
+                )
+            )
+
+        grid = [[]]
+        last_row_y = None
+        for row_x, row_y, item in sorted(wells, key=lambda well: well[1]):
             row = grid[-1]
             # case 1: no items in row yet, so we can't make a comparison
             if len(row) == 0:
-                row.append(item)
+                row.append((row_x, item))
+                last_row_y = row_y
                 continue
             # case 2: item is too far from last item on the y axis, so we're in a new row
-            last_item = row[-1]
-            distance = item[1][1] - last_item[1][1]
-            is_in_new_row = distance > self.average_radius
+            is_in_new_row = (row_y - last_row_y) > self.average_radius
             if is_in_new_row:
-                grid.append([item])
-                continue
-            # case 3: item is close enough to last item, so we're still in the same row
-            row.append(item)
+                grid.append([(row_x, item)])
+            else:
+                # case 3: item is close enough to last item, so we're still in the same row
+                row.append((row_x, item))
+            last_row_y = row_y
 
         # sort each row by x coordinate
         for row in grid:
-            row.sort(key=lambda item: item[0][0])
+            row.sort(key=lambda entry: entry[0])
 
         # convert each raw element into a class instance
         total_rows = len(grid)
         for row_index, row in enumerate(grid):
-            for col_index, item in enumerate(row):
+            for col_index, (_, item) in enumerate(row):
                 # this is the index of each well in the output,
                 # meaning we go down each column, then over to the next row
                 index = col_index * total_rows + row_index
