@@ -25,10 +25,7 @@ class FrameHandler(MotionEvent):
         self.average = 0
 
     def find_item(self, center):
-        row = self.grid.find_row(center)
-        if row is None:
-            return
-        return row.find_item(center)
+        return self.grid.find_item(center)
 
     def handle_contour(self, contour, frame_count: int):
         # note that this does not emit anything: it only picks the contour that

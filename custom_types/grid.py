@@ -89,6 +89,19 @@ class Grid(GridComponent):
                 return row
         return None
 
+    def find_item(self, point: Point):
+        # a row's bounds are the union of its wells, so on a grid that isn't perfectly
+        # level those boxes overlap: the left end of one row sits lower than the right
+        # end of the row above. that means the first row to claim a point often isn't
+        # the row the point belongs to, so we keep looking instead of giving up
+        for row in self.rows:
+            if not row.contains(point):
+                continue
+            item = row.find_item(point)
+            if item is not None:
+                return item
+        return None
+
     @property
     def dimensions(self):
         return (len(self.rows), len(self.rows[0].items))
