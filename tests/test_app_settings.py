@@ -50,6 +50,9 @@ class TestAppSettings(unittest.TestCase):
         self.mock_open = mock_open(read_data=mock_json)
         self.patcher = patch("builtins.open", self.mock_open)
         self.patcher.start()
+        # without this the mock stays installed for the rest of the process, and
+        # every later test quietly reads and writes through it instead of the disk
+        self.addCleanup(self.patcher.stop)
 
         self.app_settings = AppSettings()
 
