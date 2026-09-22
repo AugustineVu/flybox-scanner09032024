@@ -41,13 +41,18 @@ class DebugOptions:
 
 class DebugHandler(MotionEventHandler):
     def __init__(self, grid: Grid, handler: MotionEventHandler):
+        # MotionEventHandler sets up on_frame, which FrameHandler reads every frame
+        super().__init__()
         self.grid = grid
         self.handler = handler
         self.options = DebugOptions()
 
-        if self.options.draw_index:
-            self.overlay = None
-            self.on_frame = self.draw_indices
+        # wire this up whatever the index option currently says. draw_indices checks
+        # the option itself, so leaving it unset when the option happens to start off
+        # only meant two things: FrameHandler blew up looking for on_frame, and
+        # turning the option on later had no effect because nothing was listening
+        self.overlay = None
+        self.on_frame = self.draw_indices
 
     def draw_indices(self, frame):
         if not self.options.draw_index:
