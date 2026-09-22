@@ -203,6 +203,38 @@ class TestAppWiring(unittest.TestCase):
 
         self.assertEqual(record_canvas.frame_count, 20)
 
+    def test_a_failing_save_shows_up_on_screen(self):
+        # the whole point of the strip: a run left alone should show that saving has
+        # stopped working, without anyone going and reading the log
+        scan_canvas = self.scan()
+        scan_canvas.record_button.invoke()
+        record_canvas = self.root_window.children["!recordcanvas"]
+        record_canvas.recorder.start = lambda: None
+        record_canvas.update()
+        self.assertEqual(record_canvas.status_label.cget("text"), "")
+
+        real_open = open
+
+        def locked(path, *args, **kwargs):
+            if str(path) == OUTPUT_FILE and args and args[0] == "a":
+                raise IOError("file locked by another process")
+            return real_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=locked):
+            record_canvas.recorder.flush()
+            record_canvas.update()
+        failing = record_canvas.status_label.cget("text")
+
+        record_canvas.recorder.flush()
+        record_canvas.update()
+        recovered = record_canvas.status_label.cget("text")
+
+        self.assertIn("NOT SAVING", failing)
+        self.assertIn("Recovered", recovered)
+        # and the interval that failed was still written out in the end
+        with real_open(OUTPUT_FILE) as f:
+            self.assertEqual(len([line for line in f.read().splitlines() if line]), 2)
+
     def test_a_bad_scan_cannot_start_recording(self):
         scan_canvas = self.scan()
         scan_canvas.grid = None
